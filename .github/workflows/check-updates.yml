@@ -1,0 +1,52 @@
+name: Check for Tailscale Updates
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Every day at midnight
+  workflow_dispatch: # Manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  check-updates:
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.compare.outputs.new_version }}
+      tag: ${{ steps.upstream.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest upstream tag
+        id: upstream
+        run: |
+          UPSTREAM_TAG=$(git ls-remote --tags --sort="v:refname" https://github.com/tailscale/tailscale.git | grep -v 'pre\|beta\|rc\|{}$' | tail -n1 | sed 's/.*\///')
+          echo "tag=$UPSTREAM_TAG" >> $GITHUB_OUTPUT
+          echo "Found upstream tag: $UPSTREAM_TAG"
+
+      - name: Get latest local release
+        id: local
+        run: |
+          LOCAL_RELEASE=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/latest" | grep -Po '"tag_name": "\K.*?(?=")' || echo "none")
+          if [ -z "$LOCAL_RELEASE" ]; then LOCAL_RELEASE="none"; fi
+          echo "tag=$LOCAL_RELEASE" >> $GITHUB_OUTPUT
+          echo "Found local release: $LOCAL_RELEASE"
+
+      - name: Compare tags
+        id: compare
+        run: |
+          if [ "${{ steps.upstream.outputs.tag }}" != "${{ steps.local.outputs.tag }}" ]; then
+            echo "new_version=true" >> $GITHUB_OUTPUT
+          else
+            echo "new_version=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    needs: check-updates
+    if: needs.check-updates.outputs.new_version == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      ts_version: ${{ needs.check-updates.outputs.tag }}
